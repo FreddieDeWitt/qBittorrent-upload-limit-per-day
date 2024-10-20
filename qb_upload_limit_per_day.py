@@ -14,12 +14,12 @@ RESET_TIME = "00:01"  # HH:MM ("00:01" will reset exactly at 12:01.AM)
 AUTH_ENABLED = True
 TIMEOUT = 10
 
+PAUSED_TORRENT_SAVE_FILE = "qb_torrents.json"
 # Global vars
 qb_online_status = True
 upload_today_midnight = None
 update_job = None
 reset_job = None
-
 
 def login():
     """
@@ -112,11 +112,17 @@ def get_upload_data_usage():
     else:
         raise Exception("Response wan't ok")
    
-
-
 def pause_all_seeding_torrents():
     try:
         seeding_torrents = request_with_login(requests.get, f"{QB_URL}/api/v2/torrents/info?filter=seeding").json()
+        hashes = set([torrent["hash"] for torrent in seeding_torrents])
+        if exists(PAUSED_TORRENT_SAVE_FILE):
+            with open(PAUSED_TORRENT_SAVE_FILE) as f:
+                previous_hashes = set(json.load(f))
+            hashes = hashes.union(previous_hashes)
+        with open(PAUSED_TORRENT_SAVE_FILE, "w") as file:
+            json.dump(list(hashes), file)
+
         if len(seeding_torrents):
             for torrent in seeding_torrents:
                 request_with_login(requests.post, f"{QB_URL}/api/v2/torrents/pause", data={"hashes": torrent["hash"]})
@@ -125,18 +131,25 @@ def pause_all_seeding_torrents():
     except:
         return False # qBittorrent is offline
 
-
 def resume_all_paused_torrents():
     try:
         paused_torrents = request_with_login(requests.get, f"{QB_URL}/api/v2/torrents/info?filter=paused").json()
-        if len(paused_torrents):
-            for torrent in paused_torrents:
-                request_with_login(requests.post, f"{QB_URL}/api/v2/torrents/resume", data={"hashes": torrent["hash"]})
-            print("Daily upload data usage reseted, all torrents resumed")
+        paused_hashes = set([torrent["hash"] for torrent in paused_torrents])
+        hashes = paused_hashes
+        if exists(PAUSED_TORRENT_SAVE_FILE):
+            with open(PAUSED_TORRENT_SAVE_FILE) as f:
+                seeding_hashes = set(json.load(f))
+            with open(PAUSED_TORRENT_SAVE_FILE,"w") as f:
+                f.write("[]")
+            preserved_hashed = paused_hashes.intersection(seeding_hashes)
+            hashes = preserved_hashed
+        
+        if len(hashes):
+            for hash in hashes:
+                request_with_login(requests.post, f"{QB_URL}/api/v2/torrents/resume", data={"hashes": hash})
         return True
     except:
         return False  # qBittorrent is offline
-
 
 def load_data_from_cache():
     try:
@@ -148,7 +161,6 @@ def load_data_from_cache():
         with open("qb_upload_data_usage_cache.json", "w") as file:
             file.write(str(data))
         return data
-
 
 def save_data_to_cache(data):
     with open("qb_upload_data_usage_cache.json", "w") as file:
@@ -175,6 +187,22 @@ def update_usage_for_today():
     
     upload_today_midnight = initial_usage_today
     save_data_to_cache(data)
+
+def check_saved_torrents():
+    if not exists(PAUSED_TORRENT_SAVE_FILE):
+        return
+    
+    with open(PAUSED_TORRENT_SAVE_FILE) as f:
+        saved_torrents = json.load(f)
+    total_upload_data = get_upload_data_usage()
+    today_upload = total_upload_data - upload_today_midnight
+    if len(saved_torrents) > 0 and today_upload < UPLOAD_LIMIT:
+        resume_all_paused_torrents()
+        print("Paused torrents that should be running were found and resumed.")
+        
+
+
+
 
 def check_previous_session_upload_data_usage():
     global upload_today_midnight
@@ -221,8 +249,6 @@ def check_and_update_upload_data_usage():
     print(f"Today's upload data usage: {upload_data_today:.2f}")
     print("---------------------------")
 
-
-
 def reset_daily_usage():
     global update_job, reset_job, qb_online_status
 
@@ -243,6 +269,7 @@ def reset_daily_usage():
                 qb_online_status = True
             update_job = get_normal_update_job()
             update_job.run()
+            print("Daily upload data usage reset, all torrents resumed")
         else:
             raise Exception()
     except Exception:
@@ -251,11 +278,14 @@ def reset_daily_usage():
             qb_online_status = False
             reset_job = schedule.every(CHECK_INTERVAL).seconds.do(reset_daily_usage).run()
 
-
 if __name__ == "__main__":
+    # reset_daily_usage()
     check_previous_session_upload_data_usage()
+    check_saved_torrents()
+    
     update_job = get_normal_update_job()
     reset_job = get_normal_reset_job()
+
     update_job.run()
     # schedule.every(5).minutes.do(reset_daily_usage)  # reset schedule for development
 
