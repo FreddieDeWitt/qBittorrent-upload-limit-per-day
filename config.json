@@ -1,0 +1,8 @@
+{
+    "UPLOAD_LIMIT": 50,
+    "QB_URL": "http://localhost:8080",
+    "CHECK_INTERVAL": 60,
+    "RESET_TIME": "00:01",
+    "AUTH_ENABLED": true,
+    "TIMEOUT": 10
+}

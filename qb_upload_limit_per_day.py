@@ -6,13 +6,13 @@ import schedule
 
 from os.path import exists
 
-# Configuration
-UPLOAD_LIMIT = 50  # Upload limit in GB (per day)
-QB_URL = "http://localhost:8080" # qBittorrent Web UI URL
-CHECK_INTERVAL = 60  # In seconds
-RESET_TIME = "00:01"  # HH:MM ("00:01" will reset exactly at 12:01.AM)
-AUTH_ENABLED = True
-TIMEOUT = 10
+# Configuration parameters
+UPLOAD_LIMIT = None
+QB_URL = None
+CHECK_INTERVAL = None
+RESET_TIME = None
+AUTH_ENABLED = None
+TIMEOUT = None
 
 PAUSED_TORRENT_SAVE_FILE = "qb_torrents.json"
 # Global vars
@@ -278,8 +278,36 @@ def reset_daily_usage():
             qb_online_status = False
             reset_job = schedule.every(CHECK_INTERVAL).seconds.do(reset_daily_usage).run()
 
+def load_config():
+    CONFIG_NAME = "config.json"
+    default_config = {
+        "UPLOAD_LIMIT":50, 
+        "QB_URL":"http://localhost:8080", 
+        "CHECK_INTERVAL":60, 
+        "RESET_TIME":"00:01", 
+        "AUTH_ENABLED": True, 
+        "TIMEOUT":10
+    }
+    
+    if not exists(CONFIG_NAME):
+        print(f"{CONFIG_NAME} not found, the default config file has been created.")
+        with open(CONFIG_NAME, "w") as f:
+            json.dump(default_config, f, indent=4)
+
+    with open(CONFIG_NAME) as f:
+        config = json.load(f)
+    error_str = "{} not found in " + CONFIG_NAME + ". Please" \
+                "add it to " + CONFIG_NAME + "or check the writing. " \
+                "Default value = {}"
+    for key in default_config:
+        if key not in config:
+            raise ValueError(error_str.format(key, default_config[key]))
+        else:
+            globals()[key] = config[key]
+
 if __name__ == "__main__":
     # reset_daily_usage()
+    load_config()
     check_previous_session_upload_data_usage()
     check_saved_torrents()
     
