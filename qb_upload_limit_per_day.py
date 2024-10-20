@@ -199,10 +199,6 @@ def check_saved_torrents():
     if len(saved_torrents) > 0 and today_upload < UPLOAD_LIMIT:
         resume_all_paused_torrents()
         print("Paused torrents that should be running were found and resumed.")
-        
-
-
-
 
 def check_previous_session_upload_data_usage():
     global upload_today_midnight
