@@ -3,6 +3,7 @@ import json
 import time
 import datetime
 import schedule
+import configparser
 
 from os.path import exists
 
@@ -11,7 +12,6 @@ UPLOAD_LIMIT = None
 QB_URL = None
 CHECK_INTERVAL = None
 RESET_TIME = None
-AUTH_ENABLED = None
 TIMEOUT = None
 
 PAUSED_TORRENT_SAVE_FILE = "qb_torrents.json"
@@ -21,72 +21,66 @@ upload_today_midnight = None
 update_job = None
 reset_job = None
 
+password = None
+username = None
+cookies = None
+
 def login():
     """
-    Performs login to qBittorrent WebUI using data from secrets.json
+    Performs login to qBittorrent WebUI using data from config.conf
     If login is successful, the resulting cookies are stored in 
     cookies.json file, so that the other methods can access them 
-    for authentification
+    for authentication
     """
-    file_name = "secrets.json"
-    if not exists(file_name):
-        return False, f"{file_name} with your username and password doesn't exist."
-    try:
-        with open(file_name) as f:
-            secrets = json.load(f)
-            if "username" not in secrets:
-                return False, f"username field is not in {file_name}"
-            if "password" not in secrets:
-                return False, f"password field is not in {file_name}"
-    except Exception as e:
-        return False, f"Error {e} occured while reading JSON"
-
-    response = requests.post(f"{QB_URL}/api/v2/auth/login",data={"username":secrets["username"],"password":secrets["password"]})
+    global cookies
+    response = requests.post(f"{QB_URL}/api/v2/auth/login",data={"username":username,"password":password})
     if response.status_code != 200:
         return False, response.text
     if not response.text.lower().startswith("ok"):
         return False, "Wrong username or password"
     
+    cookies = response.cookies.get_dict()
     with open("cookies.json","w") as f:
-        json.dump(response.cookies.get_dict(), f)
-    
+        json.dump(cookies, f)
+
     return True, ""
 
 def print_login_failure(login_res):
     """
-    Prints the reason the login failed and a template for secrets.json
+    Prints the reason the login failed and a template for config.conf
 
     :param login_res: -- tuple of two elements, where first - if login
     was successful, second - failure message  
     """
     print("Login failed: ", login_res[1])
-    print('Make sure secrets.json has the following format\n'
-        '{\n'
-        '    "username" : "<your username>",\n'
-        '    "password" : "<your password>"\n'
-        '}')
+    print('Make sure you specified you username and password in config.conf:\n'
+        '[AUTH]\n'
+        'username = <your username>\n'
+        'password = <your password>\n'
+        )
     
 def request_with_login(func, *args, **kwargs):
     """
-    Performs a request with the added information for authentification.
+    Performs a request with the added information for authentication.
     If the request fails with 403, the function does a second login attempt
-    to generate new cookies. If after that the authentification still fails,
+    to generate new cookies. If after that the authentication still fails,
     the program exits, as the user need to fix the credentials.
 
-    AUTH_ENABLED is False, the reqular request is performed instead.
     :param func: -- function to perform the request, such as requests.get
-    :param args: -- fuction parameters
+    :param args: -- function parameters
     :param kwargs: -- function keyword parameters
     """
-    if not AUTH_ENABLED:
-        return func(*args, **kwargs, timeout=TIMEOUT)
-    if not exists("cookies.json"):
-        res = login()
-        if not res[0]:
-            print_login_failure(res)
-            exit(1)
-    with open("cookies.json") as f:
-        cookies = json.load(f)
+    global cookies
+
+    if cookies is None:
+        if not exists("cookies.json"):
+            res = login()
+            if not res[0]:
+                print_login_failure(res)
+                exit(1)
+        else:
+            with open("cookies.json") as f:
+                cookies = json.load(f)
 
     response = func(*args, **kwargs, cookies=cookies, timeout=TIMEOUT)
     
@@ -96,8 +90,6 @@ def request_with_login(func, *args, **kwargs):
         if not res[0]:
             print_login_failure(res)
             exit(1)
-        with open("cookies.json") as f:
-            cookies = json.load(f)
         response = func(*args, **kwargs, cookies=cookies, timeout=TIMEOUT)
     
     return response
@@ -275,31 +267,59 @@ def reset_daily_usage():
             reset_job = schedule.every(CHECK_INTERVAL).seconds.do(reset_daily_usage).run()
 
 def load_config():
-    CONFIG_NAME = "config.json"
+    CONFIG_NAME = "config.conf"
+
+    config = configparser.ConfigParser()
+    
     default_config = {
         "UPLOAD_LIMIT":50, 
         "QB_URL":"http://localhost:8080", 
         "CHECK_INTERVAL":60, 
         "RESET_TIME":"00:01", 
-        "AUTH_ENABLED": True, 
-        "TIMEOUT":10
+        "TIMEOUT":10,
     }
+
+    getint = config.getint
+    config_types = {
+        "UPLOAD_LIMIT": getint, 
+        "CHECK_INTERVAL":getint, 
+        "TIMEOUT":getint,
+    }
+
     
+    default_config_auth = {
+        "username" : "",
+        "password" : "",
+    }
+
     if not exists(CONFIG_NAME):
         print(f"{CONFIG_NAME} not found, the default config file has been created.")
+        config["SETTINGS"] = default_config
+        config["AUTH"] = default_config_auth
         with open(CONFIG_NAME, "w") as f:
-            json.dump(default_config, f, indent=4)
+            config.write(f)
 
-    with open(CONFIG_NAME) as f:
-        config = json.load(f)
+    config.read(CONFIG_NAME)
+
     error_str = "{} not found in " + CONFIG_NAME + ". Please" \
                 "add it to " + CONFIG_NAME + "or check the writing. " \
                 "Default value = {}"
     for key in default_config:
-        if key not in config:
+        key_lower = key.lower()
+        if key_lower not in config["SETTINGS"]:
             raise ValueError(error_str.format(key, default_config[key]))
         else:
-            globals()[key] = config[key]
+            if key in config_types:
+                type_conversion_func = config_types[key]
+                globals()[key] = type_conversion_func("SETTINGS", key_lower)        
+            else:
+                globals()[key] = config["SETTINGS"][key_lower]
+    for key in default_config_auth:
+        if key not in config["AUTH"]:
+            raise ValueError(error_str.format(key, default_config[key]))
+        else:
+            globals()[key] = config["AUTH"][key]
+
 
 if __name__ == "__main__":
     # reset_daily_usage()
